@@ -1,0 +1,16 @@
+[Unit]
+Description=Auditoria SCC Discord bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/auditoria-scc
+EnvironmentFile=/opt/auditoria-scc/.env
+Environment=TZ=America/Sao_Paulo
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
