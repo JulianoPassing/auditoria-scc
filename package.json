@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "pm2": "pm2 start ecosystem.config.cjs"
   },
   "engines": {
     "node": ">=20"

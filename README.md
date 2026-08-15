@@ -13,26 +13,20 @@ Permissões: ver canal, ler histórico, enviar mensagens, embeds.
 
 3. Copie o **token** do bot (Developer Portal → Bot → Reset Token).
 
-## VPS
+## VPS (PM2)
 
 ```bash
-git clone <url-do-repo> auditoria-scc
+git clone https://github.com/JulianoPassing/auditoria-scc.git
 cd auditoria-scc
 cp .env.example .env
-nano .env   # cole DISCORD_BOT_TOKEN=
-docker compose up -d --build
-docker compose logs -f
-```
-
-Sem Docker:
-
-```bash
-cp .env.example .env
+nano .env
 npm install
-node src/index.js
+pm2 start src/index.js --name auditoria-scc
+pm2 save
+pm2 logs auditoria-scc
 ```
 
-Ou copie `auditoria-scc.service` para `/etc/systemd/system/` e `systemctl enable --now auditoria-scc`.
+O token fica só no `.env`. Depois de um `git pull`, use `pm2 restart auditoria-scc`.
 
 ## Módulo PM/PRS
 
