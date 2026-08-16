@@ -1,40 +1,38 @@
-import { parseDtsEmbed } from "./parse.js";
+import { parseDtsEmbed, parseMoney } from "./parse.js";
 
-const message = {
-  createdTimestamp: 1_755_280_000_000,
-  embeds: [
-    {
-      title: "📄 Registro Detran Street — DTS",
-      fields: [
-        { name: "🛡️ Oficial DTS", value: "EST Juliano" },
-        {
-          name: "📡 Registrado por",
-          value: "**Nome:** EST Juliano\n**Discord ID:** `123456789012345678`\n**@usuário:** <@123456789012345678>",
-        },
-      ],
-    },
-  ],
-};
+const fields = [
+  { name: "🛡️ Oficial DTS", value: "EST Juliano" },
+  {
+    name: "📡 Registrado por",
+    value: "**Nome:** EST Juliano\n**Discord ID:** `123456789012345678`\n**@usuário:** <@123456789012345678>",
+  },
+  { name: "💰 Multa final", value: "**R$ 1.500,00**" },
+  { name: "💰 Multa total", value: "**R$ 2.000**" },
+];
 
-const event = parseDtsEmbed(message);
+function msg(title) {
+  return { createdTimestamp: 1, embeds: [{ title, fields }] };
+}
+
+const dts = parseDtsEmbed(msg("📄 Registro Detran Street — DTS"));
 const checks = [
-  event?.tipo === "registro",
-  event?.discordId === "123456789012345678",
-  event?.name === "EST Juliano",
+  dts?.tipo === "dts",
+  dts?.forca === "dts",
+  dts?.discordId === "123456789012345678",
+  dts?.name === "EST Juliano",
+  parseDtsEmbed(msg("🔧 Alteração de Característica — DTS"))?.tipo === "alteracao",
+  parseDtsEmbed(msg("📋 Ficha Criminal — PM"))?.tipo === "apreensao_pessoa",
+  parseDtsEmbed(msg("📋 Ficha Criminal — PRS"))?.forca === "prs",
+  parseDtsEmbed(msg("🚗 Apreensão Veicular — PRS (3 veículos)"))?.quantidade === 3,
+  parseDtsEmbed(msg("💰 Multa Veicular — PRS"))?.tipo === "multa",
+  parseDtsEmbed(msg("🚦 Registro de Blitz — PRS"))?.tipo === "blitz",
+  parseDtsEmbed(msg("📦 Apreensão de Ilegais — PM"))?.forca === "pm",
+  parseMoney("**R$ 1.500,00**") === 1500,
 ];
 
 if (checks.some((ok) => !ok)) {
-  console.error("parse dts falhou", event);
+  console.error("parse ranking falhou", dts, checks);
   process.exit(1);
 }
 
-const alteracao = parseDtsEmbed({
-  createdTimestamp: 1,
-  embeds: [{ title: "🔧 Alteração de Característica — DTS", fields: message.embeds[0].fields }],
-});
-if (alteracao?.tipo !== "alteracao") {
-  console.error("parse alteração falhou", alteracao);
-  process.exit(1);
-}
-
-console.log("parse dts ok", event);
+console.log("parse ranking ok", dts);

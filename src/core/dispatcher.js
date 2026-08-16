@@ -12,34 +12,71 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function listenIds(mod) {
+  const ids = new Set();
+  if (Array.isArray(mod.listenChannelIds)) {
+    for (const id of mod.listenChannelIds) {
+      if (id) ids.add(String(id));
+    }
+  }
+  if (mod.listenChannelId) ids.add(String(mod.listenChannelId));
+  return [...ids];
+}
+
+function shouldSkipChannelName(name) {
+  return /ranking|auditoria|ticket|antidump|log.?acesso/i.test(String(name || ""));
+}
+
 export async function resolveListenChannel(client, mod) {
-  if (mod.listenChannelId) {
+  const channels = await resolveListenChannels(client, mod);
+  return channels[0] || null;
+}
+
+export async function resolveListenChannels(client, mod) {
+  const ids = new Set(listenIds(mod));
+  const patterns = [
+    ...(Array.isArray(mod.listenChannelPatterns) ? mod.listenChannelPatterns : []),
+    ...(mod.listenChannelPattern ? [mod.listenChannelPattern] : []),
+  ];
+
+  if (patterns.length && mod.guildId) {
     try {
-      const channel = await client.channels.fetch(mod.listenChannelId);
-      if (channel?.isTextBased()) return channel;
+      const guild = await client.guilds.fetch(mod.guildId);
+      const all = await guild.channels.fetch();
+      for (const channel of all.values()) {
+        if (!channel?.isTextBased() || shouldSkipChannelName(channel.name)) continue;
+        if (patterns.some((pattern) => pattern.test(channel.name))) {
+          if (!ids.has(channel.id)) {
+            console.log(`[${mod.id}] canal resolvido: #${channel.name} (${channel.id})`);
+          }
+          ids.add(channel.id);
+        }
+      }
     } catch (err) {
-      console.warn(`[${mod.id}] canal ${mod.listenChannelId} inacessível:`, err.message);
+      console.warn(`[${mod.id}] falha ao listar canais:`, err.message);
     }
   }
 
-  if (mod.listenChannelPattern && mod.guildId) {
-    const guild = await client.guilds.fetch(mod.guildId);
-    const channels = await guild.channels.fetch();
-    const found = channels.find(
-      (channel) => channel?.isTextBased() && mod.listenChannelPattern.test(channel.name),
-    );
-    if (found) {
-      mod.listenChannelId = found.id;
-      console.log(`[${mod.id}] canal resolvido: #${found.name} (${found.id})`);
-      return found;
+  const resolved = [];
+  for (const id of ids) {
+    try {
+      const channel = await client.channels.fetch(id);
+      if (channel?.isTextBased() && !shouldSkipChannelName(channel.name)) {
+        resolved.push(channel);
+      }
+    } catch (err) {
+      console.warn(`[${mod.id}] canal ${id} inacessível:`, err.message);
     }
   }
 
-  return null;
+  mod.listenChannelIds = resolved.map((channel) => channel.id);
+  mod.listenChannelId = mod.listenChannelIds[0] || "";
+  return resolved;
 }
 
 export function ingestMessage(mod, message) {
-  if (!mod.listenChannelId || message.channelId !== mod.listenChannelId) return false;
+  const ids = listenIds(mod);
+  if (!ids.length || !ids.includes(message.channelId)) return false;
   if (mod.guildId && message.guildId && message.guildId !== mod.guildId) return false;
   if (mod.sourceAppId && !isFromSource(message, mod.sourceAppId)) return false;
 
@@ -102,8 +139,8 @@ async function fetchMessagesInRange(channel, startMs, endMs, afterId) {
 }
 
 export async function backfill(client, mod, key = dateKey()) {
-  const channel = await resolveListenChannel(client, mod);
-  if (!channel?.isTextBased()) {
+  const channels = await resolveListenChannels(client, mod);
+  if (!channels.length) {
     console.warn(`[${mod.id}] canal de leitura inválido: ${mod.listenChannelId || "(não resolvido)"}`);
     return 0;
   }
@@ -112,11 +149,13 @@ export async function backfill(client, mod, key = dateKey()) {
   const startMs = startOfDayMs(key);
   const endMs = startOfDayMs(shiftDateKey(key, 1));
   const afterId = mod.kind === "records" ? null : day.lastMessageId;
-  const messages = await fetchMessagesInRange(channel, startMs, endMs, afterId);
-
   let count = 0;
-  for (const msg of messages) {
-    if (ingestMessage(mod, msg)) count += 1;
+
+  for (const channel of channels) {
+    const messages = await fetchMessagesInRange(channel, startMs, endMs, afterId);
+    for (const msg of messages) {
+      if (ingestMessage(mod, msg)) count += 1;
+    }
   }
 
   if (count) console.log(`[${mod.id}] backfill ${key}: ${count} logs`);
@@ -124,29 +163,33 @@ export async function backfill(client, mod, key = dateKey()) {
 }
 
 export async function backfillSince(client, mod, startMs = lastWeeklyResetMs()) {
-  const channel = await resolveListenChannel(client, mod);
-  if (!channel?.isTextBased()) {
+  const channels = await resolveListenChannels(client, mod);
+  if (!channels.length) {
     console.warn(`[${mod.id}] canal de leitura inválido: ${mod.listenChannelId || "(não resolvido)"}`);
     return 0;
   }
 
-  const messages = await fetchMessagesInRange(channel, startMs, Date.now() + 1000, null);
+  let scanned = 0;
   let count = 0;
-  for (const msg of messages) {
-    if (ingestMessage(mod, msg)) count += 1;
+  for (const channel of channels) {
+    const messages = await fetchMessagesInRange(channel, startMs, Date.now() + 1000, null);
+    scanned += messages.length;
+    for (const msg of messages) {
+      if (ingestMessage(mod, msg)) count += 1;
+    }
   }
 
-  console.log(`[${mod.id}] varredura completa: ${messages.length} msgs no canal, ${count} novos armazenados`);
+  console.log(`[${mod.id}] varredura completa: ${scanned} msgs em ${channels.length} canal(is), ${count} novos armazenados`);
   return count;
 }
 
-let dtsSyncTimer = null;
+let rankingSyncTimer = null;
 
 export function scheduleDtsSync(mod) {
-  if (mod?.id !== "dts") return;
-  clearTimeout(dtsSyncTimer);
-  dtsSyncTimer = setTimeout(() => {
-    syncDtsCalculadora(mod).catch((err) => console.error("[dts] falha no sync da calculadora", err));
+  if (mod?.kind !== "records") return;
+  clearTimeout(rankingSyncTimer);
+  rankingSyncTimer = setTimeout(() => {
+    syncDtsCalculadora(mod).catch((err) => console.error("[ranking] falha no sync da calculadora", err));
   }, 8000);
 }
 

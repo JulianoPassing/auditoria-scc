@@ -32,7 +32,13 @@ const client = new Client({
 });
 
 function moduleByListenChannel(channelId) {
-  return modules.find((mod) => mod.listenChannelId && mod.listenChannelId === channelId);
+  return modules.find((mod) => {
+    const ids = [
+      ...(Array.isArray(mod.listenChannelIds) ? mod.listenChannelIds : []),
+      mod.listenChannelId,
+    ].filter(Boolean);
+    return ids.includes(channelId);
+  });
 }
 
 function modulesByReportChannel(channelId) {
@@ -97,7 +103,7 @@ client.on("messageCreate", async (message) => {
       if (reportMod.kind === "records") {
         await backfillSince(client, reportMod);
         await syncDtsCalculadora(reportMod).catch((err) =>
-          console.error("[dts] falha no sync da calculadora", err),
+          console.error("[ranking] falha no sync da calculadora", err),
         );
       }
       await sendModuleReport(client, reportMod, dateKey(), { preview: true });
@@ -135,7 +141,7 @@ cron.schedule(
       await backfillSince(client, mod);
       await syncDtsCalculadora(mod);
     } catch (err) {
-      console.error("[dts] falha na varredura periódica", err);
+      console.error("[ranking] falha na varredura periódica", err);
     }
   },
   { timezone: TIMEZONE },

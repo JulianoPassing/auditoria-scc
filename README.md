@@ -47,13 +47,23 @@ Para o DTS atualizar o ranking da calculadora, o `.env` da VPS e o Vercel precis
 
 Todo dia às **00:00 BRT** o bot fecha o dia (00:00–23:59) e manda o relatório no canal de destino, agrupado por `Nome (steam:id)`.
 
-## Módulo DTS
+## Módulo ranking (calculadora)
 
-Lê **todas** as mensagens do `#registros-dts` (paginando de 100 em 100), guarda localmente e manda o placar da semana para a calculadora.
+Lê os canais das calculadoras (PM, PRS, DTS), guarda os embeds e atualiza [relatorios.html](https://calculadora-scc.vercel.app/relatorios.html) e o ranking diário.
 
-- Conta no ranking: embed **Registro Detran Street — DTS**
-- Só armazena, não conta no ranking: **Alteração de Característica**
+Canais (pelo nome, o bot precisa estar neles):
+
+- `#registros-dts`
+- ficha PM / ficha PRS
+- pátio / apreensão veicular
+- multas PRS
+- blitz
+- ilegais PM e PRS
+
+Não lê canais de ranking (são saída, não entrada).
+
 - Varredura ao ligar, a cada 5 minutos, e no `!auditoria`
+- Alteração de característica DTS é armazenada, mas não entra no placar
 
 No canal de relatório, quem tem **Gerenciar servidor** pode mandar `!auditoria` para um preview do dia atual (não fecha o dia) e forçar o sync do DTS.
 

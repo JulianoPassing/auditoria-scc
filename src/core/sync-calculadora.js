@@ -1,19 +1,19 @@
 import { lastWeeklyResetMs } from "./day.js";
-import { aggregateRecords } from "./store.js";
+import { aggregateRanking } from "./store.js";
 
 const DEFAULT_URL = "https://calculadora-scc.vercel.app/api/auditoria-sync";
 
 export async function syncDtsCalculadora(mod) {
-  if (mod?.id !== "dts") return null;
+  if (mod?.kind !== "records") return null;
 
   const secret = process.env.CALCULADORA_SYNC_SECRET;
   if (!secret) {
-    console.warn("[dts] CALCULADORA_SYNC_SECRET ausente — gravado local, ranking não atualizado");
+    console.warn("[ranking] CALCULADORA_SYNC_SECRET ausente — gravado local, ranking não atualizado");
     return null;
   }
 
   const sinceMs = lastWeeklyResetMs();
-  const users = aggregateRecords(mod.id, { sinceMs, tipo: "registro" });
+  const users = aggregateRanking(mod.id, { sinceMs });
   const url = process.env.CALCULADORA_SYNC_URL || DEFAULT_URL;
 
   const response = await fetch(url, {
@@ -21,9 +21,9 @@ export async function syncDtsCalculadora(mod) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       secret,
-      fonte: "auditoria-dts",
+      fonte: "auditoria-ranking",
       sinceMs,
-      users: users.map(({ id, apelido, veiculos }) => ({ id, apelido, veiculos })),
+      users,
     }),
   });
 
@@ -32,7 +32,9 @@ export async function syncDtsCalculadora(mod) {
     throw new Error(`calculadora ${response.status}: ${body.slice(0, 240)}`);
   }
 
-  const total = users.reduce((sum, u) => sum + u.veiculos, 0);
-  console.log(`[dts] ranking atualizado: ${users.length} oficiais, ${total} registros`);
-  return { users: users.length, total };
+  const dts = users.reduce((sum, u) => sum + (Number(u.dts?.veiculos) || 0), 0);
+  const pm = users.reduce((sum, u) => sum + (Number(u.pm?.apreensoes) || 0), 0);
+  const prs = users.reduce((sum, u) => sum + (Number(u.prs?.apreensoes) || 0), 0);
+  console.log(`[ranking] relatorios.html atualizado: ${users.length} oficiais · PM ${pm} · PRS ${prs} · DTS ${dts}`);
+  return { users: users.length, dts, pm, prs };
 }
