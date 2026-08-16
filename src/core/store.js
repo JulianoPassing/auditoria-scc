@@ -13,6 +13,7 @@ function emptyDay(dateKey) {
     reported: false,
     lastMessageId: null,
     players: {},
+    records: {},
   };
 }
 
@@ -27,6 +28,7 @@ export function loadDay(moduleId, dateKey) {
       ...emptyDay(dateKey),
       ...parsed,
       players: parsed.players ?? {},
+      records: parsed.records ?? {},
     };
   } catch {
     return emptyDay(dateKey);
@@ -60,4 +62,52 @@ export function addMovement(day, event) {
   }
 
   return playerKey;
+}
+
+export function addRecord(day, event) {
+  if (!event?.messageId || day.records[event.messageId]) return false;
+
+  day.records[event.messageId] = {
+    discordId: String(event.discordId),
+    name: event.name || "Usuário",
+    tipo: event.tipo || "registro",
+    at: event.at ?? null,
+  };
+
+  if (!day.lastMessageId || BigInt(event.messageId) > BigInt(day.lastMessageId)) {
+    day.lastMessageId = event.messageId;
+  }
+
+  return true;
+}
+
+export function aggregateRecords(moduleId, { sinceMs = 0, tipo = "registro" } = {}) {
+  const dir = path.join(DATA_DIR, moduleId);
+  if (!fs.existsSync(dir)) return [];
+
+  const users = {};
+  for (const file of fs.readdirSync(dir)) {
+    if (!file.endsWith(".json")) continue;
+    let day;
+    try {
+      day = JSON.parse(fs.readFileSync(path.join(dir, file), "utf8"));
+    } catch {
+      continue;
+    }
+
+    for (const [messageId, rec] of Object.entries(day.records || {})) {
+      if (tipo && rec.tipo !== tipo) continue;
+      if (sinceMs && Number(rec.at) && Number(rec.at) < sinceMs) continue;
+      const id = String(rec.discordId || "");
+      if (!id) continue;
+      if (!users[id]) {
+        users[id] = { id, apelido: rec.name || "Usuário", veiculos: 0, messageIds: [] };
+      }
+      users[id].veiculos += 1;
+      users[id].apelido = rec.name || users[id].apelido;
+      users[id].messageIds.push(messageId);
+    }
+  }
+
+  return Object.values(users).sort((a, b) => b.veiculos - a.veiculos);
 }

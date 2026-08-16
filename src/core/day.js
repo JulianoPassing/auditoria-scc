@@ -43,3 +43,20 @@ export function snowflakeFromMs(ms) {
   const ts = BigInt(Math.max(0, ms - Number(discordEpoch)));
   return (ts << 22n).toString();
 }
+
+/** Segunda 04:30 UTC (01:30 BRT), mesmo horário do reset semanal da calculadora. */
+export function lastWeeklyResetMs(now = new Date()) {
+  const utcDay = now.getUTCDay();
+  const daysSinceMonday = (utcDay + 6) % 7;
+  let reset = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() - daysSinceMonday,
+    4,
+    30,
+    0,
+    0,
+  );
+  if (now.getTime() < reset) reset -= 7 * 86_400_000;
+  return reset;
+}

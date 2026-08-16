@@ -1,14 +1,45 @@
 import { PermissionFlagsBits } from "discord.js";
-import { dateKey, previousDateKey, shiftDateKey, snowflakeFromMs, startOfDayMs } from "./day.js";
-import { addMovement, loadDay, saveDay } from "./store.js";
+import { dateKey, lastWeeklyResetMs, previousDateKey, shiftDateKey, snowflakeFromMs, startOfDayMs } from "./day.js";
+import { addMovement, addRecord, loadDay, saveDay } from "./store.js";
 import { sendReport } from "./reporter.js";
+import { syncDtsCalculadora } from "./sync-calculadora.js";
 
 function isFromSource(message, sourceAppId) {
   return message.author?.id === sourceAppId || message.applicationId === sourceAppId;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function resolveListenChannel(client, mod) {
+  if (mod.listenChannelId) {
+    try {
+      const channel = await client.channels.fetch(mod.listenChannelId);
+      if (channel?.isTextBased()) return channel;
+    } catch (err) {
+      console.warn(`[${mod.id}] canal ${mod.listenChannelId} inacessível:`, err.message);
+    }
+  }
+
+  if (mod.listenChannelPattern && mod.guildId) {
+    const guild = await client.guilds.fetch(mod.guildId);
+    const channels = await guild.channels.fetch();
+    const found = channels.find(
+      (channel) => channel?.isTextBased() && mod.listenChannelPattern.test(channel.name),
+    );
+    if (found) {
+      mod.listenChannelId = found.id;
+      console.log(`[${mod.id}] canal resolvido: #${found.name} (${found.id})`);
+      return found;
+    }
+  }
+
+  return null;
+}
+
 export function ingestMessage(mod, message) {
-  if (message.channelId !== mod.listenChannelId) return false;
+  if (!mod.listenChannelId || message.channelId !== mod.listenChannelId) return false;
   if (mod.guildId && message.guildId && message.guildId !== mod.guildId) return false;
   if (mod.sourceAppId && !isFromSource(message, mod.sourceAppId)) return false;
 
@@ -17,12 +48,17 @@ export function ingestMessage(mod, message) {
 
   const key = dateKey(message.createdAt);
   const day = loadDay(mod.id, key);
+  const payload = { ...event, messageId: message.id, at: event.at ?? message.createdTimestamp };
 
-  if (day.lastMessageId && BigInt(message.id) <= BigInt(day.lastMessageId)) {
-    return false;
+  if (mod.kind === "records" || event.kind === "record") {
+    if (!addRecord(day, payload)) return false;
+  } else {
+    if (day.lastMessageId && BigInt(message.id) <= BigInt(day.lastMessageId)) {
+      return false;
+    }
+    addMovement(day, payload);
   }
 
-  addMovement(day, { ...event, messageId: message.id });
   saveDay(mod.id, day);
   return true;
 }
@@ -30,13 +66,18 @@ export function ingestMessage(mod, message) {
 async function fetchMessagesInRange(channel, startMs, endMs, afterId) {
   const collected = [];
   let before = snowflakeFromMs(endMs);
+  let pages = 0;
+  const maxPages = 50;
 
-  while (true) {
+  while (pages < maxPages) {
     const batch = await channel.messages.fetch({ limit: 100, before });
+    pages += 1;
     if (batch.size === 0) break;
 
+    const msgs = [...batch.values()].sort((a, b) => (BigInt(a.id) > BigInt(b.id) ? -1 : 1));
     let reachedStart = false;
-    for (const msg of batch.values()) {
+
+    for (const msg of msgs) {
       if (afterId && BigInt(msg.id) <= BigInt(afterId)) {
         reachedStart = true;
         break;
@@ -50,24 +91,28 @@ async function fetchMessagesInRange(channel, startMs, endMs, afterId) {
       }
     }
 
-    before = batch.last()?.id;
-    if (reachedStart || batch.size < 100) break;
+    const oldest = msgs[msgs.length - 1];
+    if (!oldest || reachedStart || batch.size < 100) break;
+    before = oldest.id;
+    await sleep(350);
   }
 
-  return collected.reverse();
+  collected.sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+  return collected;
 }
 
 export async function backfill(client, mod, key = dateKey()) {
-  const channel = await client.channels.fetch(mod.listenChannelId);
+  const channel = await resolveListenChannel(client, mod);
   if (!channel?.isTextBased()) {
-    console.warn(`[${mod.id}] canal de leitura inválido: ${mod.listenChannelId}`);
-    return;
+    console.warn(`[${mod.id}] canal de leitura inválido: ${mod.listenChannelId || "(não resolvido)"}`);
+    return 0;
   }
 
   const day = loadDay(mod.id, key);
   const startMs = startOfDayMs(key);
   const endMs = startOfDayMs(shiftDateKey(key, 1));
-  const messages = await fetchMessagesInRange(channel, startMs, endMs, day.lastMessageId);
+  const afterId = mod.kind === "records" ? null : day.lastMessageId;
+  const messages = await fetchMessagesInRange(channel, startMs, endMs, afterId);
 
   let count = 0;
   for (const msg of messages) {
@@ -75,6 +120,34 @@ export async function backfill(client, mod, key = dateKey()) {
   }
 
   if (count) console.log(`[${mod.id}] backfill ${key}: ${count} logs`);
+  return count;
+}
+
+export async function backfillSince(client, mod, startMs = lastWeeklyResetMs()) {
+  const channel = await resolveListenChannel(client, mod);
+  if (!channel?.isTextBased()) {
+    console.warn(`[${mod.id}] canal de leitura inválido: ${mod.listenChannelId || "(não resolvido)"}`);
+    return 0;
+  }
+
+  const messages = await fetchMessagesInRange(channel, startMs, Date.now() + 1000, null);
+  let count = 0;
+  for (const msg of messages) {
+    if (ingestMessage(mod, msg)) count += 1;
+  }
+
+  console.log(`[${mod.id}] varredura completa: ${messages.length} msgs no canal, ${count} novos armazenados`);
+  return count;
+}
+
+let dtsSyncTimer = null;
+
+export function scheduleDtsSync(mod) {
+  if (mod?.id !== "dts") return;
+  clearTimeout(dtsSyncTimer);
+  dtsSyncTimer = setTimeout(() => {
+    syncDtsCalculadora(mod).catch((err) => console.error("[dts] falha no sync da calculadora", err));
+  }, 8000);
 }
 
 export async function sendModuleReport(client, mod, date, { preview = false } = {}) {

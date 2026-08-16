@@ -5,11 +5,15 @@ import { modules } from "./modules/index.js";
 import { dateKey, previousDateKey, TIMEZONE } from "./core/day.js";
 import {
   backfill,
+  backfillSince,
   closeYesterdayIfNeeded,
   hasManagePermission,
   ingestMessage,
+  resolveListenChannel,
+  scheduleDtsSync,
   sendModuleReport,
 } from "./core/dispatcher.js";
+import { syncDtsCalculadora } from "./core/sync-calculadora.js";
 
 const token = process.env.DISCORD_BOT_TOKEN;
 
@@ -28,16 +32,26 @@ const client = new Client({
 });
 
 function moduleByListenChannel(channelId) {
-  return modules.find((mod) => mod.listenChannelId === channelId);
+  return modules.find((mod) => mod.listenChannelId && mod.listenChannelId === channelId);
 }
 
-function moduleByReportChannel(channelId) {
-  return modules.find((mod) => mod.reportChannelId === channelId);
+function modulesByReportChannel(channelId) {
+  return modules.filter((mod) => mod.reportChannelId === channelId);
 }
+
+const dtsMod = () => modules.find((mod) => mod.id === "dts");
 
 client.once("ready", async () => {
   console.log(`Logado como ${client.user.tag}`);
   console.log(`Módulos: ${modules.map((m) => m.id).join(", ")}`);
+
+  for (const mod of modules) {
+    try {
+      await resolveListenChannel(client, mod);
+    } catch (err) {
+      console.error(`[${mod.id}] falha ao resolver canal`, err);
+    }
+  }
 
   try {
     await closeYesterdayIfNeeded(client, modules);
@@ -47,7 +61,12 @@ client.once("ready", async () => {
 
   for (const mod of modules) {
     try {
-      await backfill(client, mod);
+      if (mod.kind === "records") {
+        await backfillSince(client, mod);
+        scheduleDtsSync(mod);
+      } else {
+        await backfill(client, mod);
+      }
     } catch (err) {
       console.error(`[${mod.id}] falha no backfill`, err);
     }
@@ -60,22 +79,32 @@ client.on("messageCreate", async (message) => {
   const listenMod = moduleByListenChannel(message.channelId);
   if (listenMod) {
     try {
-      ingestMessage(listenMod, message);
+      if (ingestMessage(listenMod, message)) {
+        scheduleDtsSync(listenMod);
+      }
     } catch (err) {
-      console.error(`[${listenMod.id}] erro ao ingerir mensagem`, err);
+      console.error(`[${listenMod.id}] erro ao armazenar mensagem`, err);
     }
     return;
   }
 
   if (message.content.trim() !== "!auditoria") return;
-  const reportMod = moduleByReportChannel(message.channelId);
-  if (!reportMod || !hasManagePermission(message)) return;
+  const reportMods = modulesByReportChannel(message.channelId);
+  if (!reportMods.length || !hasManagePermission(message)) return;
 
   try {
-    await sendModuleReport(client, reportMod, dateKey(), { preview: true });
+    for (const reportMod of reportMods) {
+      if (reportMod.kind === "records") {
+        await backfillSince(client, reportMod);
+        await syncDtsCalculadora(reportMod).catch((err) =>
+          console.error("[dts] falha no sync da calculadora", err),
+        );
+      }
+      await sendModuleReport(client, reportMod, dateKey(), { preview: true });
+    }
     await message.react("✅");
   } catch (err) {
-    console.error(`[${reportMod.id}] falha no comando !auditoria`, err);
+    console.error("falha no comando !auditoria", err);
     await message.reply("Não consegui enviar o relatório. Veja o log da VPS.").catch(() => {});
   }
 });
@@ -92,6 +121,21 @@ cron.schedule(
       } catch (err) {
         console.error(`[${mod.id}] falha no relatório diário`, err);
       }
+    }
+  },
+  { timezone: TIMEZONE },
+);
+
+cron.schedule(
+  "*/5 * * * *",
+  async () => {
+    const mod = dtsMod();
+    if (!mod) return;
+    try {
+      await backfillSince(client, mod);
+      await syncDtsCalculadora(mod);
+    } catch (err) {
+      console.error("[dts] falha na varredura periódica", err);
     }
   },
   { timezone: TIMEZONE },
