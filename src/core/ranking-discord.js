@@ -1,3 +1,4 @@
+import { chunkText } from "./reporter.js";
 import {
   lastDailyResetMs,
   lastWeeklyResetMs,
@@ -13,6 +14,10 @@ const WEBHOOK_RANKING_DIARIO =
 const WEBHOOK_RANKING_SEMANAL =
   process.env.WEBHOOK_RANKING_SEMANAL ||
   "https://discord.com/api/webhooks/1537465608671600691/unT0DqAnQ2sBzSW1rVdAgqc6goMCxidHsvY8AihHlx7tKnQpR2p-L1ZvUe6yX01RI82c";
+
+const WEBHOOK_CONTABILIDADE =
+  process.env.WEBHOOK_CONTABILIDADE ||
+  "https://discord.com/api/webhooks/1538783750551240704/Hg0nTwQW5Ws_KlGtbp7bKlJLe6rN9e4bSZpT0ddsEqMG-8s8xhel1B0ehEoEJXa5Ycj9";
 
 const CARGOS = {
   pm: "1329451959115059312",
@@ -126,6 +131,186 @@ function totais(users, forca, campos) {
     }
   }
   return acc;
+}
+
+function oficiais(users, forca, campos) {
+  return Object.values(users)
+    .filter((u) => pertenceAForca(u, forca))
+    .map((u) => {
+      const stats = {};
+      let atividade = 0;
+      for (const campo of campos) {
+        const valor = Number(u[forca]?.[campo]) || 0;
+        stats[campo] = valor;
+        atividade += valor;
+      }
+      return {
+        id: u.id,
+        apelido: u.apelido || "Usuário",
+        stats,
+        atividade,
+        valorMultas: Number(u[forca]?.valorMultas) || 0,
+        veiculos: Number(u[forca]?.veiculos) || 0,
+      };
+    })
+    .filter((u) => u.atividade > 0)
+    .sort((a, b) => {
+      if (forca === "dts") return b.veiculos - a.veiculos || a.apelido.localeCompare(b.apelido, "pt-BR");
+      return b.valorMultas - a.valorMultas || b.atividade - a.atividade || a.apelido.localeCompare(b.apelido, "pt-BR");
+    });
+}
+
+function dinheiro(valor) {
+  return "R$ " + Number(valor || 0).toLocaleString("pt-BR");
+}
+
+function dezPorCento(valor) {
+  return Math.round(Number(valor || 0) * 0.1);
+}
+
+function linhaPm(oficial, pos) {
+  const s = oficial.stats;
+  const comissao = dezPorCento(oficial.valorMultas);
+  return [
+    `**${pos}.** <@${oficial.id}> — **${oficial.apelido}**`,
+    `Pessoas **${s.apreensoesPessoas || 0}** · Ilegais **${s.apreensoesIlegais || 0}** · Apreensões **${s.apreensoes || 0}**`,
+    `Multas **${dinheiro(oficial.valorMultas)}** → 💵 **${dinheiro(comissao)}** (10%)`,
+  ].join("\n");
+}
+
+function linhaPrs(oficial, pos) {
+  const s = oficial.stats;
+  const comissao = dezPorCento(oficial.valorMultas);
+  return [
+    `**${pos}.** <@${oficial.id}> — **${oficial.apelido}**`,
+    `Pessoas **${s.apreensoesPessoas || 0}** · Veículos **${s.apreensoesVeiculos || 0}** · Ilegais **${s.apreensoesIlegais || 0}** · Multas **${s.multas || 0}** · Blitz **${s.blitz || 0}**`,
+    `Valor **${dinheiro(oficial.valorMultas)}** → 💵 **${dinheiro(comissao)}** (10%)`,
+  ].join("\n");
+}
+
+function linhaDts(oficial, pos) {
+  return `**${pos}.** <@${oficial.id}> — **${oficial.apelido}**\nVeículos **${oficial.veiculos || 0}**`;
+}
+
+function embedsForca({ titulo, descricaoTopo, linhas, cor, footer }) {
+  const chunks = chunkText(linhas.length ? linhas : ["_Sem registros_"]);
+  return chunks.map((description, index) => ({
+    title: chunks.length > 1 ? `${titulo} (${index + 1}/${chunks.length})` : titulo,
+    color: cor,
+    description: index === 0 && descricaoTopo ? `${descricaoTopo}\n\n${description}` : description,
+    footer: { text: footer, icon_url: "https://i.imgur.com/aawPk38.png" },
+    timestamp: new Date().toISOString(),
+  }));
+}
+
+export async function publishContabilidadeSemanal(list, { republicar = false } = {}) {
+  const users = usersPorCargo(list);
+  const pm = oficiais(users, "pm", ["apreensoes", "apreensoesPessoas", "apreensoesIlegais", "valorMultas"]);
+  const prs = oficiais(users, "prs", [
+    "apreensoes",
+    "apreensoesPessoas",
+    "apreensoesVeiculos",
+    "apreensoesIlegais",
+    "multas",
+    "valorMultas",
+    "blitz",
+  ]);
+  const dts = oficiais(users, "dts", ["veiculos"]);
+
+  const folhaPm = pm.reduce((sum, u) => sum + dezPorCento(u.valorMultas), 0);
+  const folhaPrs = prs.reduce((sum, u) => sum + dezPorCento(u.valorMultas), 0);
+  const multasPm = pm.reduce((sum, u) => sum + u.valorMultas, 0);
+  const multasPrs = prs.reduce((sum, u) => sum + u.valorMultas, 0);
+  const veiculosDts = dts.reduce((sum, u) => sum + u.veiculos, 0);
+  const aviso = republicar ? "\n🔁 **Republicação do encerramento (corrigido)**" : "";
+  const footer = `Street Car Club Roleplay • Contabilidade semanal • ${agoraBrasil()}`;
+
+  const ids = [...pm, ...prs, ...dts].map((u) => u.id);
+  const base = {
+    username: "Severino Contabilidade SCC",
+    avatar_url: "https://i.imgur.com/aawPk38.png",
+    allowed_mentions: { parse: [], users: [...new Set(ids)].slice(0, 100) },
+  };
+
+  await enviarWebhook(WEBHOOK_CONTABILIDADE, {
+    ...base,
+    content:
+      `📒 **Contabilidade semanal — ${dataBrasil()}**\n` +
+      `Relatório completo por oficial. PM e PRS recebem **10%** das multas. DTS entra no geral, **sem 10%**.${aviso}`,
+    embeds: [
+      {
+        title: "💰 Folha da semana",
+        color: 0x2ecc71,
+        fields: [
+          {
+            name: "🛡️ Polícia Militar",
+            value: `Oficiais: **${pm.length}**\nMultas: **${dinheiro(multasPm)}**\n💵 10% a pagar: **${dinheiro(folhaPm)}**`,
+            inline: true,
+          },
+          {
+            name: "🛣️ Polícia Rodoviária",
+            value: `Oficiais: **${prs.length}**\nMultas: **${dinheiro(multasPrs)}**\n💵 10% a pagar: **${dinheiro(folhaPrs)}**`,
+            inline: true,
+          },
+          {
+            name: "📋 Despachante",
+            value: `Oficiais: **${dts.length}**\nVeículos: **${veiculosDts.toLocaleString("pt-BR")}**\n💵 10%: **não se aplica**`,
+            inline: true,
+          },
+          {
+            name: "🏦 Total a pagar (PM + PRS)",
+            value: `**${dinheiro(folhaPm + folhaPrs)}**`,
+            inline: false,
+          },
+        ],
+        footer: { text: footer, icon_url: "https://i.imgur.com/aawPk38.png" },
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  });
+
+  const blocos = [
+    {
+      titulo: "🛡️ Polícia Militar — lista completa",
+      descricaoTopo: `💵 10% da semana: **${dinheiro(folhaPm)}**`,
+      linhas: pm.map((u, i) => linhaPm(u, i + 1)),
+      cor: 0x3a4f73,
+    },
+    {
+      titulo: "🛣️ Polícia Rodoviária — lista completa",
+      descricaoTopo: `💵 10% da semana: **${dinheiro(folhaPrs)}**`,
+      linhas: prs.map((u, i) => linhaPrs(u, i + 1)),
+      cor: 0xc9a227,
+    },
+    {
+      titulo: "📋 Despachante — lista completa",
+      descricaoTopo: "Sem 10%. Só o volume da semana.",
+      linhas: dts.map((u, i) => linhaDts(u, i + 1)),
+      cor: 0x5b8a72,
+    },
+  ];
+
+  for (const bloco of blocos) {
+    const embeds = embedsForca({ ...bloco, footer });
+    for (let i = 0; i < embeds.length; i += 10) {
+      await enviarWebhook(WEBHOOK_CONTABILIDADE, {
+        ...base,
+        embeds: embeds.slice(i, i + 10),
+      });
+    }
+  }
+
+  console.log(
+    `[contabilidade] semanal · PM ${pm.length} oficiais 10% ${dinheiro(folhaPm)} · PRS ${prs.length} oficiais 10% ${dinheiro(folhaPrs)} · DTS ${dts.length} oficiais ${veiculosDts} veículos`,
+  );
+
+  return {
+    ok: true,
+    pm: { oficiais: pm.length, multas: multasPm, dezPorCento: folhaPm },
+    prs: { oficiais: prs.length, multas: multasPrs, dezPorCento: folhaPrs },
+    dts: { oficiais: dts.length, veiculos: veiculosDts },
+    totalPagar: folhaPm + folhaPrs,
+  };
 }
 
 function montarDados(list) {
@@ -316,6 +501,7 @@ export async function publishClosingRankings({ moduleId = "dts", republicar = tr
     for (const payload of montarPayloads(dadosSemanal, true, { republicar })) {
       await enviarWebhook(WEBHOOK_RANKING_SEMANAL, payload);
     }
+    await publishContabilidadeSemanal(fechamento.semanal, { republicar });
   }
 
   const diario = resumoTotais(dadosDiario);
