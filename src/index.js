@@ -107,10 +107,11 @@ client.on("messageCreate", async (message) => {
           console.error("[ranking] falha no backfill", err),
         );
       }
+      const semanal = ehSegundaBrasil();
       const resultado = await publishClosingRankings({
         moduleId: dts?.id || "dts",
         republicar: true,
-        semanal: true,
+        semanal,
       });
       if (dts) {
         await syncDtsCalculadora(dts).catch((err) =>
