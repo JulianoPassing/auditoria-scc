@@ -2,7 +2,7 @@ import "dotenv/config";
 import cron from "node-cron";
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { modules } from "./modules/index.js";
-import { dateKey, previousDateKey, TIMEZONE } from "./core/day.js";
+import { dateKey, previousDateKey, previousWeeklyResetMs, TIMEZONE } from "./core/day.js";
 import {
   backfill,
   backfillSince,
@@ -14,6 +14,7 @@ import {
   sendModuleReport,
 } from "./core/dispatcher.js";
 import { syncDtsCalculadora } from "./core/sync-calculadora.js";
+import { publishClosingRankings } from "./core/ranking-discord.js";
 
 const token = process.env.DISCORD_BOT_TOKEN;
 
@@ -94,9 +95,39 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  if (message.content.trim() !== "!auditoria") return;
+  const comando = message.content.trim();
   const reportMods = modulesByReportChannel(message.channelId);
   if (!reportMods.length || !hasManagePermission(message)) return;
+
+  if (comando === "!ranking") {
+    try {
+      const dts = dtsMod();
+      if (dts) {
+        await backfillSince(client, dts, previousWeeklyResetMs()).catch((err) =>
+          console.error("[ranking] falha no backfill", err),
+        );
+      }
+      const resultado = await publishClosingRankings({
+        moduleId: dts?.id || "dts",
+        republicar: true,
+        semanal: true,
+      });
+      if (dts) {
+        await syncDtsCalculadora(dts).catch((err) =>
+          console.error("[ranking] falha no sync da calculadora", err),
+        );
+      }
+      await message.reply(
+        `Ranking corrigido publicado.\nDiário: PM ${resultado.diario.pm} · PRS ${resultado.diario.prs} · DTS ${resultado.diario.dts}\nSemanal: PM ${resultado.semanal.pm} · PRS ${resultado.semanal.prs} · DTS ${resultado.semanal.dts}`,
+      );
+    } catch (err) {
+      console.error("falha no comando !ranking", err);
+      await message.reply("Não consegui republicar o ranking. Veja o log da VPS.").catch(() => {});
+    }
+    return;
+  }
+
+  if (comando !== "!auditoria") return;
 
   try {
     for (const reportMod of reportMods) {
@@ -115,6 +146,10 @@ client.on("messageCreate", async (message) => {
   }
 });
 
+function ehSegundaBrasil(now = new Date()) {
+  return now.toLocaleDateString("en-US", { timeZone: TIMEZONE, weekday: "short" }) === "Mon";
+}
+
 cron.schedule(
   "0 0 * * *",
   async () => {
@@ -127,6 +162,41 @@ cron.schedule(
       } catch (err) {
         console.error(`[${mod.id}] falha no relatório diário`, err);
       }
+    }
+  },
+  { timezone: TIMEZONE },
+);
+
+cron.schedule(
+  "30 1 * * *",
+  async () => {
+    const dts = dtsMod();
+    const semanal = ehSegundaBrasil();
+    console.log(semanal ? "Encerrando ranking diário e semanal (01:30)" : "Encerrando ranking diário (01:30)");
+    try {
+      if (dts) {
+        await backfillSince(client, dts, previousWeeklyResetMs()).catch((err) =>
+          console.error("[ranking] falha no backfill do encerramento", err),
+        );
+      }
+      const resultado = await publishClosingRankings({
+        moduleId: dts?.id || "dts",
+        republicar: false,
+        semanal,
+      });
+      if (dts) {
+        await syncDtsCalculadora(dts).catch((err) =>
+          console.error("[ranking] falha no sync após encerramento", err),
+        );
+      }
+      console.log(
+        `[ranking] encerramento ok · diário PM ${resultado.diario.pm} PRS ${resultado.diario.prs} DTS ${resultado.diario.dts}` +
+          (resultado.semanal
+            ? ` · semanal PM ${resultado.semanal.pm} PRS ${resultado.semanal.prs} DTS ${resultado.semanal.dts}`
+            : ""),
+      );
+    } catch (err) {
+      console.error("[ranking] falha no encerramento 01:30", err);
     }
   },
   { timezone: TIMEZONE },

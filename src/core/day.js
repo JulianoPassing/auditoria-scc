@@ -44,19 +44,41 @@ export function snowflakeFromMs(ms) {
   return (ts << 22n).toString();
 }
 
+const RESET_HOUR_UTC = 4;
+const RESET_MINUTE_UTC = 30;
+
+function utcResetOnDate(now, dayOffset = 0) {
+  return Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + dayOffset,
+    RESET_HOUR_UTC,
+    RESET_MINUTE_UTC,
+    0,
+    0,
+  );
+}
+
+/** Todo dia 04:30 UTC (01:30 BRT), horário do RR / ranking diário. */
+export function lastDailyResetMs(now = new Date()) {
+  let reset = utcResetOnDate(now);
+  if (now.getTime() < reset) reset -= 86_400_000;
+  return reset;
+}
+
+export function previousDailyResetMs(now = new Date()) {
+  return lastDailyResetMs(now) - 86_400_000;
+}
+
 /** Segunda 04:30 UTC (01:30 BRT), mesmo horário do reset semanal da calculadora. */
 export function lastWeeklyResetMs(now = new Date()) {
   const utcDay = now.getUTCDay();
   const daysSinceMonday = (utcDay + 6) % 7;
-  let reset = Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate() - daysSinceMonday,
-    4,
-    30,
-    0,
-    0,
-  );
+  let reset = utcResetOnDate(now, -daysSinceMonday);
   if (now.getTime() < reset) reset -= 7 * 86_400_000;
   return reset;
+}
+
+export function previousWeeklyResetMs(now = new Date()) {
+  return lastWeeklyResetMs(now) - 7 * 86_400_000;
 }

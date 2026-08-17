@@ -185,7 +185,7 @@ function applyRankingEvent(user, rec) {
   }
 }
 
-export function aggregateRanking(moduleId, { sinceMs = 0 } = {}) {
+export function aggregateRanking(moduleId, { sinceMs = 0, untilMs = 0 } = {}) {
   const dir = path.join(DATA_DIR, moduleId);
   if (!fs.existsSync(dir)) return [];
 
@@ -200,7 +200,9 @@ export function aggregateRanking(moduleId, { sinceMs = 0 } = {}) {
     }
 
     for (const rec of Object.values(day.records || {})) {
-      if (sinceMs && Number(rec.at) && Number(rec.at) < sinceMs) continue;
+      const at = Number(rec.at);
+      if (sinceMs && at && at < sinceMs) continue;
+      if (untilMs && at && at >= untilMs) continue;
       const id = String(rec.discordId || "");
       if (!id) continue;
       if (!users[id]) {
