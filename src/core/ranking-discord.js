@@ -353,23 +353,48 @@ function agoraBrasil() {
   return new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
 }
 
-function dataBrasil() {
-  return new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+function dataBrasil(ms) {
+  const date = ms ? new Date(ms) : new Date();
+  return date.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
 }
 
-function top1(grupo, campo) {
-  return (grupo?.rankings?.[campo] || [])[0] || null;
+function formatMsBr(ms) {
+  return new Date(ms).toLocaleString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
-function linhaTop(campo, lider) {
-  if (!lider) return "_Sem registros_";
-  return `<@${lider.id}>\n**${lider.apelido}** — **${formatarValor(campo, lider.valor)}**`;
+function periodoTexto(inicioMs, fimMs) {
+  return `${formatMsBr(inicioMs)} → ${formatMsBr(fimMs)}`;
 }
 
-function embedForca(titulo, grupo, categorias, semanal, cor) {
+function podium(lista, campo) {
+  const medals = ["🥇", "🥈", "🥉"];
+  const top = (lista || []).slice(0, 3);
+  if (!top.length) return "_Sem registros_";
+  return top
+    .map((u, i) => `${medals[i]} <@${u.id}> — **${formatarValor(campo, u.valor)}**`)
+    .join("\n");
+}
+
+function idsDoPodium(dados, forca) {
+  return [
+    ...new Set(
+      CATEGORIAS[forca].flatMap(([campo]) =>
+        (dados[forca]?.rankings?.[campo] || []).slice(0, 3).map((u) => u.id),
+      ),
+    ),
+  ].filter(Boolean);
+}
+
+function embedForca({ titulo, grupo, categorias, semanal, cor, periodo, republicar }) {
   const fields = categorias.map(([campo, label]) => ({
-    name: `🥇 ${label}`,
-    value: linhaTop(campo, top1(grupo, campo)),
+    name: label,
+    value: podium(grupo?.rankings?.[campo], campo),
     inline: true,
   }));
 
@@ -384,73 +409,114 @@ function embedForca(titulo, grupo, categorias, semanal, cor) {
     inline: false,
   });
 
+  const extra = republicar ? "\n🔁 Republicação corrigida." : "";
   return {
     title: titulo,
+    description: `Período: **${periodo}**${extra}`,
     color: cor,
     fields,
     footer: {
-      text: `Street Car Club Roleplay • ${semanal ? "Ranking semanal • zera após o RR" : "Ranking diário"} • ${agoraBrasil()}`,
+      text: `Street Car Club Roleplay • ${semanal ? "Ranking semanal" : "Ranking diário"} • ${agoraBrasil()}`,
       icon_url: "https://i.imgur.com/aawPk38.png",
     },
     timestamp: new Date().toISOString(),
   };
 }
 
-function payloadForca({ dados, forca, cargoId, tituloEmbed, cor, semanal, cabecalho }) {
+function payloadForca({ dados, forca, cargoId, tituloEmbed, cor, semanal, cabecalho, periodo, republicar }) {
   return {
-    username: semanal ? "Severino Ranking Semanal PM e PRS" : "Severino Ranking PM e PRS",
+    username: semanal ? "Severino Ranking Semanal" : "Severino Ranking Diário",
     avatar_url: "https://i.imgur.com/aawPk38.png",
     content: `${cabecalho}\n<@&${cargoId}>`,
     allowed_mentions: {
       parse: [],
-      users: [
-        ...new Set(
-          CATEGORIAS[forca]
-            .map(([campo]) => top1(dados[forca], campo)?.id)
-            .filter(Boolean),
-        ),
-      ],
+      users: idsDoPodium(dados, forca),
       roles: [cargoId],
     },
-    embeds: [embedForca(tituloEmbed, dados[forca], CATEGORIAS[forca], semanal, cor)],
+    embeds: [
+      embedForca({
+        titulo: tituloEmbed,
+        grupo: dados[forca],
+        categorias: CATEGORIAS[forca],
+        semanal,
+        cor,
+        periodo,
+        republicar,
+      }),
+    ],
   };
 }
 
-function montarPayloads(dados, semanal, { republicar = false } = {}) {
-  const aviso = republicar ? "\n🔁 **Republicação do encerramento (corrigido)**" : "";
+function montarPayloads(dados, semanal, { republicar = false, periodo } = {}) {
+  const aviso = republicar ? "\n🔁 **Republicação do encerramento**" : "";
   const titulo = semanal
-    ? `🏁 **Ranking semanal — ${dataBrasil()}**\nApós o RR. Encerramento da semana — placar zera agora.${aviso}`
-    : `🏆 **Ranking diário — ${dataBrasil()}**${aviso}`;
+    ? `🏁 **Ranking semanal — ${dataBrasil()}**\nEncerramento após o RR. Top 3 da semana.${aviso}`
+    : `🏆 **Ranking diário — ${dataBrasil()}**\nEncerramento após o RR. Top 3 do dia.${aviso}`;
 
   return [
     payloadForca({
       dados,
       forca: "pm",
       cargoId: CARGOS.pm,
-      tituloEmbed: semanal ? "🛡️ Polícia Militar — Top 1 da semana" : "🛡️ Polícia Militar — Top 1",
+      tituloEmbed: semanal ? "🛡️ Polícia Militar — Top 3 da semana" : "🛡️ Polícia Militar — Top 3 do dia",
       cor: 0x3a4f73,
       semanal,
+      periodo,
+      republicar,
       cabecalho: `${titulo}\n🛡️ **Polícia Militar**`,
     }),
     payloadForca({
       dados,
       forca: "prs",
       cargoId: CARGOS.prs,
-      tituloEmbed: semanal ? "🛣️ Polícia Rodoviária — Top 1 da semana" : "🛣️ Polícia Rodoviária — Top 1",
+      tituloEmbed: semanal ? "🛣️ Polícia Rodoviária — Top 3 da semana" : "🛣️ Polícia Rodoviária — Top 3 do dia",
       cor: 0xc9a227,
       semanal,
+      periodo,
+      republicar,
       cabecalho: `🛣️ **Polícia Rodoviária**`,
     }),
     payloadForca({
       dados,
       forca: "dts",
       cargoId: CARGOS.prs,
-      tituloEmbed: semanal ? "📋 Despachante — Top 1 da semana" : "📋 Despachante — Top 1",
-      cor: 0xc9a227,
+      tituloEmbed: semanal ? "📋 Despachante — Top 3 da semana" : "📋 Despachante — Top 3 do dia",
+      cor: 0x5b8a72,
       semanal,
+      periodo,
+      republicar,
       cabecalho: `📋 **Despachante**`,
     }),
   ];
+}
+
+async function publicarResetSemanal({ republicar = false, periodo } = {}) {
+  const extra = republicar ? "\n🔁 Republicação do reset." : "";
+  await enviarWebhook(WEBHOOK_RANKING_SEMANAL, {
+    username: "Severino Ranking Semanal",
+    avatar_url: "https://i.imgur.com/aawPk38.png",
+    content: "🔄 **Reset semanal**",
+    embeds: [
+      {
+        title: "Placar semanal zerado",
+        color: 0xff1a1a,
+        description: [
+          `Semana encerrada: **${periodo}**`,
+          "O ranking **semanal** começa do zero a partir de agora.",
+          "O ranking **diário** segue todo dia às **01:30**.",
+          "Próximo semanal: **segunda, 01:30**, após o RR.",
+          extra,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        footer: {
+          text: `Street Car Club Roleplay • Nova semana • ${agoraBrasil()}`,
+          icon_url: "https://i.imgur.com/aawPk38.png",
+        },
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  });
 }
 
 async function enviarWebhook(url, payload) {
@@ -489,27 +555,32 @@ export function fecharRankings(moduleId = "dts") {
 }
 
 export async function publishClosingRankings({ moduleId = "dts", republicar = true, semanal = true } = {}) {
+  const diarioInicio = lastDailyResetMs();
+  const semanalInicio = lastWeeklyResetMs();
   const fechamento = fecharRankings(moduleId);
   const dadosDiario = montarDados(fechamento.diario);
   const dadosSemanal = montarDados(fechamento.semanal);
+  const periodoDiario = periodoTexto(previousDailyResetMs(), diarioInicio);
+  const periodoSemanal = periodoTexto(previousWeeklyResetMs(), semanalInicio);
 
-  for (const payload of montarPayloads(dadosDiario, false, { republicar })) {
+  for (const payload of montarPayloads(dadosDiario, false, { republicar, periodo: periodoDiario })) {
     await enviarWebhook(WEBHOOK_RANKING_DIARIO, payload);
   }
 
   if (semanal) {
-    for (const payload of montarPayloads(dadosSemanal, true, { republicar })) {
+    for (const payload of montarPayloads(dadosSemanal, true, { republicar, periodo: periodoSemanal })) {
       await enviarWebhook(WEBHOOK_RANKING_SEMANAL, payload);
     }
     await publishContabilidadeSemanal(fechamento.semanal, { republicar });
+    await publicarResetSemanal({ republicar, periodo: periodoSemanal });
   }
 
   const diario = resumoTotais(dadosDiario);
   const semana = resumoTotais(dadosSemanal);
   console.log(
     `[ranking] publicado encerramento · diário PM ${diario.pm} PRS ${diario.prs} DTS ${diario.dts}` +
-      (semanal ? ` · semanal PM ${semana.pm} PRS ${semana.prs} DTS ${semana.dts}` : ""),
+      (semanal ? ` · semanal PM ${semana.pm} PRS ${semana.prs} DTS ${semana.dts} · reset ok` : ""),
   );
 
-  return { ok: true, diario, semanal: semanal ? semana : null };
+  return { ok: true, diario, semanal: semanal ? semana : null, reset: Boolean(semanal) };
 }

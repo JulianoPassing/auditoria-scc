@@ -3,7 +3,7 @@ import { buildDtsReport } from "./report.js";
 
 /**
  * Lê os canais das calculadoras (PM, PRS, DTS), armazena os embeds
- * e manda o placar da semana para relatorios.html / ranking.
+ * e publica ranking diário/semanal no Discord.
  */
 export default {
   id: "dts",

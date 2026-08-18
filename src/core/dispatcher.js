@@ -2,7 +2,6 @@ import { PermissionFlagsBits } from "discord.js";
 import { dateKey, lastWeeklyResetMs, previousDateKey, shiftDateKey, snowflakeFromMs, startOfDayMs } from "./day.js";
 import { addMovement, addRecord, loadDay, saveDay } from "./store.js";
 import { sendReport } from "./reporter.js";
-import { syncDtsCalculadora } from "./sync-calculadora.js";
 
 function isFromSource(message, sourceAppId) {
   return message.author?.id === sourceAppId || message.applicationId === sourceAppId;
@@ -183,15 +182,7 @@ export async function backfillSince(client, mod, startMs = lastWeeklyResetMs()) 
   return count;
 }
 
-let rankingSyncTimer = null;
-
-export function scheduleDtsSync(mod) {
-  if (mod?.kind !== "records") return;
-  clearTimeout(rankingSyncTimer);
-  rankingSyncTimer = setTimeout(() => {
-    syncDtsCalculadora(mod).catch((err) => console.error("[ranking] falha no sync da calculadora", err));
-  }, 8000);
-}
+export function scheduleDtsSync(_mod) {}
 
 export async function sendModuleReport(client, mod, date, { preview = false } = {}) {
   const channel = await client.channels.fetch(mod.reportChannelId);
